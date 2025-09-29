@@ -118,9 +118,9 @@ app.put("/news/:id", upload.single("image"), async (req, res) => {
 
     const sharedLink = await handleFileUpload(file);
     news.image = sharedLink;
-    news.title = req.body.title;
-    news.text = req.body.text;
-    news.place = req.body.place;
+    news.title = req?.body?.title?req.body.title:news.title;
+    news.text = req?.body?.text?req.body.text:news.text;
+    news.place = req?.body?.place?req.body.place:news.place;
     await news.save();
 
     res.status(200).json(news);
