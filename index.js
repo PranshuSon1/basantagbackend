@@ -125,7 +125,7 @@ app.put("/news/:id", upload.single("image"), async (req, res) => {
 
     res.status(200).json(news);
   } catch (err) {
-    res.status.status(400).json(err);
+    res.status(400).json(err);
   }
 });
 app.delete("/news/:id", async (req, res) => {
