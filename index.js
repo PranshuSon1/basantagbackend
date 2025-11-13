@@ -3,8 +3,10 @@ const bodyParser = require("body-parser");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
+const bcrypt = require("bcrypt");
 const connectDB = require("./db");
 const News = require("./models/News");
+const User = require("./models/User");
 const Dropbox = require("dropbox").Dropbox;
 require("dotenv").config();
 
@@ -25,6 +27,98 @@ function authenticateToken(req, res, next) {
     next();
   });
 }
+// login api with jwt token generation using user from database
+app.post("/login", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    if (!username || !password) {
+      return res.status(400).json({ message: "Username and password are required" });
+    }
+
+    // Find user by username
+    const user = await User.findOne({ username });
+    if (!user) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    // Compare password with hashed password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    // Generate JWT token
+    const tokenPayload = { id: user._id, username: user.username };
+    const accessToken = jwt.sign(tokenPayload, process.env.SECRET_KEY, {
+      expiresIn: "1h",
+    });
+    
+    res.json({ accessToken });
+  } catch (err) {
+    console.error("Login error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// Create user API
+app.post("/users",  async (req, res) => {
+  try {
+    const { username, email, password } = req.body;
+
+    // Validate required fields
+    if (!username || !email || !password) {
+      return res.status(400).json({ 
+        message: "Username, email, and password are required" 
+      });
+    }
+
+    // Check if username already exists
+    const existingUsername = await User.findOne({ username });
+    if (existingUsername) {
+      return res.status(400).json({ message: "Username already exists" });
+    }
+
+    // Check if email already exists
+    const existingEmail = await User.findOne({ email });
+    if (existingEmail) {
+      return res.status(400).json({ message: "Email already exists" });
+    }
+
+    // Hash password before creating user
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // Create new user with hashed password
+    const user = new User({
+      username,
+      email,
+      password: hashedPassword,
+    });
+
+    await user.save();
+
+    // Return user without password
+    const userResponse = {
+      id: user._id,
+      username: user.username,
+      email: user.email,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    };
+
+    res.status(201).json({ 
+      message: "User created successfully", 
+      user: userResponse 
+    });
+  } catch (err) {
+    console.error("Create user error:", err);
+    if (err.name === "ValidationError") {
+      return res.status(400).json({ message: err.message });
+    }
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
 // Routes
 //handle image upload using multer
@@ -64,7 +158,7 @@ const handleFileUpload = async (file) => {
     .replace("?dl=0", "?raw=1");
 };
 // News CRUD operations
-app.post("/news", upload.single("image"), async (req, res) => {
+app.post("/news",authenticateToken, upload.single("image"), async (req, res) => {
   try {
     const file = req.file;
     if (!file) {
@@ -102,25 +196,28 @@ app.get("/news/:id", async (req, res) => {
     res.status(500).send(err);
   }
 });
-app.put("/news/:id", upload.single("image"), async (req, res) => {
+app.put("/news/:id",authenticateToken, upload.single("image"), async (req, res) => {
   try {
     const file = req.file;
-    if (!file) {
-      return res.status(400).json({ error: "No file uploaded" });
-    }
     const news = await News.findById(req.params.id);
     if (!news) {
       return res.status(404).json({ message: "News not found" });
     }
-    if (file.size > UPLOAD_FILE_SIZE_LIMIT) {
-      return res.status(400).json({ error: "File size exceeds 150MB limit" });
+
+    // Only update image if a new file is uploaded
+    if (file) {
+      if (file.size > UPLOAD_FILE_SIZE_LIMIT) {
+        return res.status(400).json({ error: "File size exceeds 70MB limit" });
+      }
+      const sharedLink = await handleFileUpload(file);
+      news.image = sharedLink;
     }
 
-    const sharedLink = await handleFileUpload(file);
-    news.image = sharedLink;
-    news.title = req?.body?.title?req.body.title:news.title;
-    news.text = req?.body?.text?req.body.text:news.text;
-    news.place = req?.body?.place?req.body.place:news.place;
+    // Update text fields if provided
+    news.title = req?.body?.title ? req.body.title : news.title;
+    news.text = req?.body?.text ? req.body.text : news.text;
+    news.place = req?.body?.place ? req.body.place : news.place;
+    
     await news.save();
 
     res.status(200).json(news);
@@ -128,7 +225,7 @@ app.put("/news/:id", upload.single("image"), async (req, res) => {
     res.status(400).json(err);
   }
 });
-app.delete("/news/:id", async (req, res) => {
+app.delete("/news/:id",authenticateToken, async (req, res) => {
   try {
     const news = await News.findByIdAndDelete(req.params.id);
     if (!news) {
